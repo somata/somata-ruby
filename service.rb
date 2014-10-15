@@ -23,8 +23,79 @@ class Service
         @http = Net::HTTP.new('localhost', 8500)
 
         self.register
-        self.start_checking
+        Thread.new { self.pass_checks_loop }
     end
+
+    def listen
+        @listener = Thread.new { self.socket_recv_loop }
+        @listener.join()
+    end
+
+    # Socket receive loop
+    # --------------------------------------------------------------------------
+    # Each message is a JSON object that should have a 'kind' attribute. If
+    # there's a handler function for a given message kind, call it.
+
+    def socket_recv_loop
+        while true do
+            @poller.poll 10
+            @poller.readables.each do |sock|
+
+                # Get client ID and parse message from JSON
+                client_id = ''
+                message_json = ''
+                sock.recv_string(client_id, ZMQ::DONTWAIT)
+                sock.recv_string(message_json, ZMQ::DONTWAIT)
+                message = JSON.parse message_json
+
+                puts "#{ client_id } ==> #{ message_json }"
+                STDOUT.flush
+
+                self.handle_message(sock, client_id, message)
+
+            end
+        end
+    end
+
+    def handle_message(sock, client_id, message)
+
+        if message['kind'] == 'method'
+            self.handle_method(sock, client_id, message)
+
+        else
+            # TODO: Handle other message kinds
+            puts "Unrecognized message: #{ message }"
+        end
+
+    end
+
+    # Handlers
+    # --------------------------------------------------------------------------
+
+    def handle_method(sock, client_id, message)
+
+        # Find the method
+        if method_proc = @methods[message['method'].to_sym]
+
+            # Create a respond callback
+            respond = -> (_response) {
+                response = {"id"=> message['id'], "kind"=> "response", "response"=>_response}
+                sock.send_string(client_id, ZMQ::SNDMORE)
+                sock.send_string(response.to_json)
+            }
+
+            # Call the method with the respond callback
+            method_proc.call(message['args'], respond)
+
+        # If such a method doesn't exist
+        else
+            puts @methods
+        end
+
+    end
+
+    # Service registration and health checking
+    # --------------------------------------------------------------------------
 
     def register
         registration = {
@@ -52,70 +123,15 @@ class Service
         @http.request(req)
     end
 
-    def start_checking
-        Thread.new {
-            while true do
-                sleep(5)
-                self.pass_check
-            end
-        }
-    end
-
-    def listen
-        return Thread.new {
-            while true do
-                self.poll
-            end
-        }
-    end
-
-    def poll
-        @poller.poll 10
-        @poller.readables.each do |sock|
-
-            # Get client ID and parse message from JSON
-            client_id = ''
-            message_json = ''
-            sock.recv_string(client_id, ZMQ::DONTWAIT)
-            sock.recv_string(message_json, ZMQ::DONTWAIT)
-            message = JSON.parse message_json
-
-            puts "#{ client_id } ==> #{ message_json }"
-            STDOUT.flush
-
-            self.handle_message(sock, client_id, message)
-
+    def pass_checks_loop
+        while true do
+            sleep(5)
+            self.pass_check
         end
     end
 
-    def handle_message(sock, client_id, message)
-
-        # Methods
-        if message['kind'] == 'method'
-
-            # Find the method
-            if method_proc = @methods[message['method'].to_sym]
-
-                # Create a respond callback
-                respond = -> (_response) {
-                    response = {"id"=> message['id'], "kind"=> "response", "response"=>_response}
-                    sock.send_string(client_id, ZMQ::SNDMORE)
-                    sock.send_string(response.to_json)
-                }
-
-                # Call the method with the respond callback
-                method_proc.call(message['args'], respond)
-
-            # If such a method doesn't exist
-            else
-                puts @methods
-            end
-
-        # TODO: Handle other message kinds
-        else
-            puts message
-        end
-    
+    def deregister
+        puts "TODO"
     end
 
 end
