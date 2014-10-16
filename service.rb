@@ -13,13 +13,13 @@ class Service
         puts "Initializing service #{ @name }..."
 
         @ctx = ZMQ::Context.new
-        @socket = @ctx.socket(ZMQ::ROUTER)
+        @sock = @ctx.socket(ZMQ::ROUTER)
 
-        @socket.bind(sprintf('tcp://0.0.0.0:%d', options['bind_port']))
+        @sock.bind(sprintf('tcp://0.0.0.0:%d', options['bind_port']))
         puts sprintf('tcp://0.0.0.0:%d', options['bind_port'])
 
         @poller = ZMQ::Poller.new
-        @poller.register_readable(@socket)
+        @poller.register_readable(@sock)
         @http = Net::HTTP.new('localhost', 8500)
 
         @subscriptions = {}
@@ -108,8 +108,6 @@ class Service
         else
             @subscriptions[event_type] = [new_subscription]
         end
-
-        puts "Subscriptions: " + @subscriptions.to_json
     end
 
     def handle_unsubscribe(sock, client_id, message)
@@ -119,7 +117,6 @@ class Service
         if subscriptions = @subscriptions[event_type]
             subscriptions.delete_if { |s| s['id'] == message['id'] }
         end
-        puts "Subscriptions: " + @subscriptions.to_json
     end
 
     # Event emitting
@@ -128,7 +125,9 @@ class Service
     def emit(event_type, data)
         if subscriptions = @subscriptions[event_type]
             for subscription in subscriptions
-                puts "Subscribed: " + subscription.to_json
+                event = {"id" => subscription['id'], "kind" => "event", "event" => data}
+                @sock.send_string(subscription['client_id'], ZMQ::SNDMORE)
+                @sock.send_string(event.to_json)
             end
         end
     end
